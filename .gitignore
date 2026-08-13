@@ -1,0 +1,28 @@
+# ufbt / fbt build output
+dist/
+build/
+.ufbt/
+
+# compiled objects
+*.o
+*.d
+*.elf
+*.bin
+
+# python
+__pycache__/
+*.pyc
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# host test binaries and their generated data
+test/host_pocsag_test
+test/host_privacy_test
+test/host_roster_test
+test/host_mockup_dump
+test/mockup_data.txt
+test/*.dSYM/

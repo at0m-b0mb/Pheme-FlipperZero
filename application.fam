@@ -1,0 +1,26 @@
+App(
+    appid="pheme",
+    name="Pheme",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="pheme_app",
+    # The page ring, the capcode roster and the BCH correction table all live on
+    # the heap, but the listen scene assembles a screenful of state on the stack
+    # and a PhmRecord is a quarter of a kilobyte on its own.
+    stack_size=8 * 1024,
+    fap_category="Sub-GHz",
+    fap_icon="icons/pheme_10px.png",
+    fap_icon_assets="icons",
+    fap_author="at0m-b0mb",
+    fap_weburl="https://github.com/at0m-b0mb/Pheme-FlipperZero",
+    fap_version="1.0",
+    # Explicit, so the recursive default does not sweep test/ (host-only code)
+    # into the firmware build.
+    sources=[
+        "pheme.c",
+        "helpers/*.c",
+        "views/*.c",
+        "scenes/*.c",
+    ],
+    fap_description="Hospitals, fire crews and plant rooms still page over POCSAG, a 1982 protocol with no encryption and no authentication whatsoever. Pheme listens to a paging channel, decodes it - preamble, sync, batch framing, BCH error correction and both payload alphabets, all written from scratch because the firmware has no POCSAG decoder - and grades every page for how much of somebody's life just went out in the clear. Messages are shown redacted by default, as a skyline of blocks that are tall wherever a person's name, ward, phone number, date of birth or door code sits, so the scale of a leak can be shown without the leak itself. No page can be graded better than B, because being paged at all tells a listener who was called and when. A per-capcode log makes the real point: a capcode never changes, so ten minutes on a channel builds a profile out of fragments that each looked harmless. Five animated lessons explain why paging was never encrypted and why it still is not. Receive only - there is no transmit path in the app.",
+    fap_libs=["subghz"],
+)
