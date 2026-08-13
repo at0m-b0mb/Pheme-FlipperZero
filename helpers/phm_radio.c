@@ -121,6 +121,12 @@ struct PhmRadio {
     FuriThread* thread;
     volatile bool thread_running;
 
+    /* The HAL's stop_async_rx is a furi_check on the radio already being in
+     * async RX, so calling it speculatively is a crash rather than a no-op.
+     * The scan thread stops before it starts on its very first channel, so
+     * this flag is what keeps that legal. */
+    bool rx_active;
+
     PhmScanBand scan[PHM_CHANNEL_COUNT];
     uint32_t scan_sweeps;
 };
@@ -229,6 +235,7 @@ static void phm_device_up(PhmRadio* radio, uint32_t frequency) {
 
 static void phm_device_down(PhmRadio* radio) {
     furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
+    radio->rx_active = false;
     subghz_devices_idle(radio->device);
     subghz_devices_sleep(radio->device);
     subghz_devices_end(radio->device);
@@ -237,6 +244,27 @@ static void phm_device_down(PhmRadio* radio) {
     furi_mutex_release(radio->dev_mutex);
 
     furi_hal_power_suppress_charge_exit();
+}
+
+static void phm_rx_start(PhmRadio* radio) {
+    furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
+    if(radio->device && !radio->rx_active) {
+        subghz_devices_start_async_rx(
+            radio->device, (void*)subghz_worker_rx_callback, radio->worker);
+        radio->rx_active = true;
+    }
+    furi_mutex_release(radio->dev_mutex);
+}
+
+/* Takes the same lock an RSSI read does, because the worker can be inside the
+ * decoder - and so inside a read - at the moment RX is torn down. */
+static void phm_rx_stop(PhmRadio* radio) {
+    furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
+    if(radio->device && radio->rx_active) {
+        subghz_devices_stop_async_rx(radio->device);
+        radio->rx_active = false;
+    }
+    furi_mutex_release(radio->dev_mutex);
 }
 
 /* ------------------------------------------------------------- lifecycle ---- */
@@ -321,7 +349,7 @@ void phm_radio_listen_start(PhmRadio* radio) {
     phm_device_up(radio, frequency);
 
     subghz_worker_start(radio->worker);
-    subghz_devices_start_async_rx(radio->device, (void*)subghz_worker_rx_callback, radio->worker);
+    phm_rx_start(radio);
 
     radio->mode = PhmModeListen;
 }
@@ -331,12 +359,7 @@ void phm_radio_listen_stop(PhmRadio* radio) {
     if(radio->mode != PhmModeListen) return;
     radio->mode = PhmModeIdle;
 
-    /* The worker can be inside the decoder - and so inside an RSSI read - right
-     * now, so tearing RX down takes the same lock it does. */
-    furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
-    subghz_devices_stop_async_rx(radio->device);
-    furi_mutex_release(radio->dev_mutex);
-
+    phm_rx_stop(radio);
     subghz_worker_stop(radio->worker);
     phm_device_down(radio);
 
@@ -434,27 +457,24 @@ static int32_t phm_scan_thread(void* context) {
 
     while(radio->thread_running) {
         for(uint8_t i = 0; i < PHM_CHANNEL_COUNT && radio->thread_running; i++) {
+            if(!radio->device) break;
+
+            phm_rx_stop(radio);
+
             furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
-            if(!radio->device) {
-                furi_mutex_release(radio->dev_mutex);
-                break;
-            }
-            subghz_devices_stop_async_rx(radio->device);
             subghz_devices_idle(radio->device);
             subghz_devices_set_frequency(radio->device, phm_channels[i].frequency);
             furi_mutex_release(radio->dev_mutex);
 
+            /* Each channel is judged on what it carried during its own dwell,
+             * so the decoder starts each one from nothing. */
             phm_pocsag_reset(radio->pocsag);
 
             furi_mutex_acquire(radio->mutex, FuriWaitForever);
             radio->channel_idx = i;
             furi_mutex_release(radio->mutex);
 
-            furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
-            subghz_devices_start_async_rx(
-                radio->device, (void*)subghz_worker_rx_callback, radio->worker);
-            furi_mutex_release(radio->dev_mutex);
-
+            phm_rx_start(radio);
             furi_delay_ms(PHM_SCAN_SETTLE_MS);
 
             /* Peak-hold across the dwell: a paging transmitter is silent most
@@ -519,10 +539,7 @@ void phm_radio_scan_stop(PhmRadio* radio) {
     furi_thread_free(radio->thread);
     radio->thread = NULL;
 
-    furi_mutex_acquire(radio->dev_mutex, FuriWaitForever);
-    subghz_devices_stop_async_rx(radio->device);
-    furi_mutex_release(radio->dev_mutex);
-
+    phm_rx_stop(radio);
     subghz_worker_stop(radio->worker);
     phm_device_down(radio);
     radio->mode = PhmModeIdle;

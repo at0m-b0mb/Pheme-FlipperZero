@@ -43,6 +43,11 @@ bool pheme_scene_scan_on_event(void* context, SceneManagerEvent event) {
     }
 
     if(event.type == SceneManagerEventTypeCustom && event.event == PhemeCustomEventTune) {
+        /* Stop the sweep before clearing the session, or the scan thread lands
+         * one more page in a spool that was meant to start empty. The on_exit
+         * handler's own stop becomes a no-op once the mode has changed. */
+        phm_radio_scan_stop(app->radio);
+
         phm_settings_save(&app->settings);
         app->demo_mode = false;
         phm_radio_reset_session(app->radio);
